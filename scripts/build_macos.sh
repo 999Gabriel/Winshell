@@ -64,9 +64,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
-  codesign --deep --force --verify --verbose --sign "$CODESIGN_IDENTITY" "$APP_DIR"
-fi
+SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+codesign --deep --force --verify --verbose --sign "$SIGN_IDENTITY" "$APP_DIR"
 
 DMG_BG_PNG="$BUILD_DIR/dmg-background.png"
 sips -s format png "$ICON_JPG" --out "$DMG_BG_PNG" >/dev/null 2>&1 || true
