@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "winshell"
+version = "0.1.0"
+description = "A Windows-style terminal shell for macOS network and system administration lessons."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=0.63.0",
+    "rich>=13.7.0",
+]
+
+[project.scripts]
+winshell = "winshell.tui.app:run"
+
+[tool.setuptools.packages.find]
+include = ["winshell*"]
