@@ -5,5 +5,9 @@ __pycache__/
 *.pyo
 build/
 dist/
+release/
 *.egg-info/
+.build-venv/
+.release-venv/
+WinShell.spec
 winshell_output.txt
