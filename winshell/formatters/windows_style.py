@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from winshell.commands.base import CommandSpec
 from winshell.models import NetworkSnapshot, SystemSnapshot
 
 
@@ -32,21 +33,40 @@ def format_help(command_rows: list[dict[str, str]]) -> str:
         "Supported commands:",
     ]
     for row in command_rows:
-        lines.append(f"  {row['name'].ljust(14)} {row['summary']}")
+        suffix = ""
+        if row["permission_level"] != "normal":
+            suffix = f" [{row['permission_level']}]"
+        alias_text = f" (aliases: {row['aliases']})" if row["aliases"] else ""
+        lines.append(f"  {row['name'].ljust(20)} {row['summary']}{alias_text}{suffix}")
     lines.extend(
         [
             "",
             "Examples:",
-            "  ipconfig",
             "  ipconfig /all",
-            "  ping example.com",
-            "  tracert example.com",
-            "  nslookup openai.com",
-            "  systeminfo",
-            "  mode cmd",
-            "  export winshell-output.txt",
+            "  route print",
+            "  getmac",
+            "  tasklist",
+            "  resolve openai.com",
+            "  test-netconnection example.com -port 443",
         ]
     )
+    return "\n".join(lines)
+
+
+def format_command_help(spec: CommandSpec) -> str:
+    lines = [
+        f"Command: {spec.name}",
+        "",
+        f"Usage: {spec.usage}",
+        f"Summary: {spec.summary}",
+        f"Permission Level: {spec.permission_level}",
+    ]
+    if spec.aliases:
+        lines.append(f"Aliases: {', '.join(spec.aliases)}")
+    if spec.examples:
+        lines.append("")
+        lines.append("Examples:")
+        lines.extend(f"  {example}" for example in spec.examples)
     return "\n".join(lines)
 
 
@@ -173,6 +193,89 @@ def format_arp(entries: list[dict[str, str]]) -> str:
     if len(lines) == 3:
         lines.append("  No ARP entries were found.")
     return "\n".join(lines)
+
+
+def format_route_table(entries: list[dict[str, str]]) -> str:
+    lines = [
+        "IPv4 Route Table",
+        "",
+        "  Network Destination   Gateway              Interface   Flags",
+    ]
+    for entry in entries:
+        lines.append(
+            f"  {entry['destination'].ljust(21)} {entry['gateway'].ljust(20)} {entry['interface'].ljust(11)} {entry['flags']}"
+        )
+    if len(lines) == 3:
+        lines.append("  No IPv4 routes were found.")
+    return "\n".join(lines)
+
+
+def format_getmac(entries: list[dict[str, str]]) -> str:
+    lines = [
+        "Physical Address      Transport Name   Adapter",
+        "",
+    ]
+    for entry in entries:
+        lines.append(
+            f"{entry['physical_address'].ljust(21)} {entry['transport'].ljust(16)} {entry['adapter']}"
+        )
+    if len(lines) == 2:
+        lines.append("No MAC addresses were found.")
+    return "\n".join(lines)
+
+
+def format_tasklist(entries: list[dict[str, str]], title: str = "Task List") -> str:
+    lines = [
+        title,
+        "",
+        "Image Name                 PID        CPU %      MEM %",
+    ]
+    for entry in entries:
+        lines.append(
+            f"{entry['image'][:24].ljust(25)} {entry['pid'].rjust(7)} {entry['cpu'].rjust(11)} {entry['memory'].rjust(10)}"
+        )
+    if len(lines) == 3:
+        lines.append("No processes were found.")
+    return "\n".join(lines)
+
+
+def format_resolution(host: str, result: dict[str, object]) -> str:
+    lines = [
+        f"Resolution Summary for {host}",
+        "",
+        f"Canonical Name : {result.get('canonical_name') or 'Unavailable'}",
+        f"IPv4 Addresses : {', '.join(result.get('ipv4', [])) or 'Unavailable'}",
+        f"IPv6 Addresses : {', '.join(result.get('ipv6', [])) or 'Unavailable'}",
+        f"Reverse Lookup : {', '.join(result.get('reverse', [])) or 'Unavailable'}",
+    ]
+    dig_lines = result.get("dig", [])
+    if dig_lines:
+        lines.append(f"dig +short    : {', '.join(dig_lines)}")
+    errors = result.get("errors", [])
+    if errors:
+        lines.extend(["", "Errors:"])
+        lines.extend(f"  {error}" for error in errors)
+    nslookup_output = str(result.get("nslookup", "")).strip()
+    if nslookup_output:
+        lines.extend(["", "nslookup:", nslookup_output])
+    return "\n".join(lines)
+
+
+def format_socket_probe(title: str, result: dict[str, object]) -> str:
+    status = "Success" if result.get("success") else "Failed"
+    rows = [
+        ("ComputerName", str(result.get("host", ""))),
+        ("RemotePort", str(result.get("port", ""))),
+        ("ResolvedAddress", str(result.get("resolved", "")) or "Unavailable"),
+        ("Status", status),
+        ("Latency", f"{result['latency_ms']} ms" if result.get("latency_ms") else "Unavailable"),
+        ("Error", str(result.get("error", "")) or "None"),
+    ]
+    return "\n".join([title, "", *_rows(rows, indent=0)])
+
+
+def format_simple_section(title: str, body: str) -> str:
+    return "\n".join([title, "", body.strip() or "No data available."])
 
 
 def format_systeminfo(snapshot: SystemSnapshot) -> str:
