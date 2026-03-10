@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import ipaddress
+from pathlib import Path
 import re
 import shutil
+import socket
+import time
 
 from winshell.adapters.runner import CommandResult, run_command
 from winshell.models import NetworkAdapter, NetworkSnapshot
@@ -47,8 +50,7 @@ def _parse_ifconfig(text: str) -> dict[str, NetworkAdapter]:
             parts = stripped.split()
             current.ipv4 = parts[1]
             if "netmask" in parts:
-                mask_index = parts.index("netmask") + 1
-                current.subnet_mask = _hex_netmask_to_ipv4(parts[mask_index])
+                current.subnet_mask = _hex_netmask_to_ipv4(parts[parts.index("netmask") + 1])
             if "broadcast" in parts:
                 current.broadcast = parts[parts.index("broadcast") + 1]
         elif stripped.startswith("inet6 "):
@@ -129,7 +131,7 @@ def network_snapshot() -> NetworkSnapshot:
         route_result = _run(["netstat", "-rn", "-f", "inet"], timeout=10)
     dns_result = _run(["scutil", "--dns"], timeout=10)
     if not dns_result.stdout:
-        dns_result = _run(["sed", "-n", "1,120p", "/etc/resolv.conf"], timeout=5)
+        dns_result = CommandResult(stdout=_read_resolv_conf(), stderr="", returncode=0)
 
     adapters = _parse_ifconfig(ifconfig_result.stdout)
     hardware_ports = _parse_hardware_ports(networksetup_result.stdout)
@@ -152,6 +154,16 @@ def network_snapshot() -> NetworkSnapshot:
         default_interface=default_interface,
         dns_servers=_parse_dns(dns_result.stdout),
     )
+
+
+def _read_resolv_conf() -> str:
+    path = Path("/etc/resolv.conf")
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def ping_host(host: str, count: int = 4) -> dict[str, object]:
@@ -285,6 +297,137 @@ def nslookup_query(arguments: list[str]) -> dict[str, object]:
     if result.returncode != 0:
         return {"error": result.stderr or result.stdout or "nslookup failed."}
     return {"output": result.stdout}
+
+
+def route_table() -> dict[str, object]:
+    result = _run(["netstat", "-rn", "-f", "inet"], timeout=10)
+    if result.returncode != 0:
+        return {"error": result.stderr or result.stdout or "Route table lookup failed."}
+
+    entries: list[dict[str, str]] = []
+    in_inet_block = False
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped == "Internet:":
+            in_inet_block = True
+            continue
+        if not in_inet_block or not stripped or stripped.startswith("Destination"):
+            continue
+        if stripped.endswith(":"):
+            break
+
+        parts = stripped.split()
+        if len(parts) < 4:
+            continue
+        destination = parts[0]
+        gateway = parts[1]
+        flags = parts[2]
+        interface = parts[3]
+        entries.append(
+            {
+                "destination": destination,
+                "gateway": gateway,
+                "flags": flags,
+                "interface": interface,
+            }
+        )
+
+    return {"entries": entries}
+
+
+def mac_addresses() -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for adapter in network_snapshot().adapters:
+        if not adapter.mac:
+            continue
+        entries.append(
+            {
+                "physical_address": adapter.mac.replace(":", "-").upper(),
+                "transport": adapter.device,
+                "adapter": adapter.name,
+            }
+        )
+    return entries
+
+
+def resolve_host(host: str) -> dict[str, object]:
+    ipv4: list[str] = []
+    ipv6: list[str] = []
+    reverse: list[str] = []
+    errors: list[str] = []
+
+    try:
+        for family, _, _, canonical_name, sockaddr in socket.getaddrinfo(host, None):
+            address = sockaddr[0]
+            if family == socket.AF_INET and address not in ipv4:
+                ipv4.append(address)
+            elif family == socket.AF_INET6 and address not in ipv6:
+                ipv6.append(address)
+    except socket.gaierror as exc:
+        errors.append(str(exc))
+
+    for address in (ipv4 + ipv6)[:3]:
+        try:
+            reverse_name = socket.gethostbyaddr(address)[0]
+            if reverse_name not in reverse:
+                reverse.append(reverse_name)
+        except (socket.herror, socket.gaierror):
+            continue
+
+    dig_lines: list[str] = []
+    dig_result = _run(["dig", "+short", host], timeout=15)
+    if dig_result.returncode == 0 and dig_result.stdout:
+        dig_lines = [line for line in dig_result.stdout.splitlines() if line.strip()]
+
+    nslookup_result = nslookup_query([host])
+    if "error" in nslookup_result and not ipv4 and not ipv6:
+        errors.append(str(nslookup_result["error"]))
+
+    return {
+        "canonical_name": socket.getfqdn(host),
+        "ipv4": ipv4,
+        "ipv6": ipv6,
+        "reverse": reverse,
+        "dig": dig_lines,
+        "nslookup": str(nslookup_result.get("output", "")).strip(),
+        "errors": errors,
+    }
+
+
+def dig_query(arguments: list[str]) -> dict[str, object]:
+    result = _run(["dig", *arguments], timeout=15)
+    if result.returncode != 0:
+        return {"error": result.stderr or result.stdout or "dig failed."}
+    return {"output": result.stdout}
+
+
+def tcp_probe(host: str, port: int, timeout: float = 3.0) -> dict[str, object]:
+    result: dict[str, object] = {
+        "host": host,
+        "port": port,
+        "resolved": "",
+        "success": False,
+        "latency_ms": "",
+        "error": "",
+    }
+
+    try:
+        resolved = socket.gethostbyname(host)
+        result["resolved"] = resolved
+    except socket.gaierror as exc:
+        result["error"] = str(exc)
+        return result
+
+    started = time.perf_counter()
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            latency_ms = (time.perf_counter() - started) * 1000
+            result["success"] = True
+            result["latency_ms"] = f"{latency_ms:.1f}"
+    except OSError as exc:
+        result["error"] = str(exc)
+
+    return result
 
 
 def get_hostname() -> str:
