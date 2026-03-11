@@ -6,12 +6,18 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import ssl
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from winshell.adapters.runner import CommandResult, run_command
 from winshell.models import NetworkAdapter, NetworkSnapshot
+
+try:
+    import certifi
+except ImportError:  # pragma: no cover - dependency should be present at runtime
+    certifi = None
 
 
 def _available(command: str) -> bool:
@@ -488,6 +494,12 @@ def _ip_scope(ip: str) -> str:
     return "public"
 
 
+def _tls_context() -> ssl.SSLContext:
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
 def geoip_lookup(target: str) -> dict[str, object]:
     resolution = _resolve_target(target)
     if "error" in resolution:
@@ -511,7 +523,7 @@ def geoip_lookup(target: str) -> dict[str, object]:
         headers={"User-Agent": "WinShell/0.1"},
     )
     try:
-        with urlopen(request, timeout=6) as response:
+        with urlopen(request, timeout=6, context=_tls_context()) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
         return {"error": f"Geolocation lookup failed: {exc}"}
