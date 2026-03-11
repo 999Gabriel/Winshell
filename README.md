@@ -16,6 +16,7 @@ The app does not try to clone PowerShell. It provides a simplified Windows-flavo
 - Command history with arrow keys
 - Tab completion for supported commands
 - Transcript export to a text file
+- Clipboard copy support from inside the app via `copy` or `F6`
 
 ## Supported commands
 
@@ -32,6 +33,7 @@ The app does not try to clone PowerShell. It provides a simplified Windows-flavo
 - `geoip <ip-or-host>`
 - `neighbors`
 - `deviceinfo [ip-or-host]`
+- `copy [all|last]`
 - `cls`
 - `help`
 - `exit`
@@ -80,6 +82,8 @@ nslookup openai.com
 geoip 8.8.8.8
 neighbors
 deviceinfo localhost
+copy
+copy last
 arp -a
 netstat
 systeminfo
@@ -93,6 +97,7 @@ export lesson-output.txt
 - `geoip` uses a public geolocation API at runtime for public IP addresses and prints coordinates plus Apple Maps / Google Maps / OpenStreetMap links.
 - `neighbors` uses the local ARP cache, so it is most useful after the Mac has recently talked to devices on the LAN.
 - `deviceinfo` shows local architecture and adapter data directly; remote device architecture is intentionally reported as unknown unless there is a reliable local source.
+- `copy` copies either the visible transcript or the last command output into the macOS clipboard using `pbcopy`.
 - If a command syntax is recognized but not implemented, WinShell shows:
   `Command not supported yet in WinShell.`
 - If a command is unknown, WinShell shows a Windows-like error:

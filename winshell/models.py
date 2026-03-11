@@ -30,6 +30,7 @@ class CommandResponse:
     exit_requested: bool = False
     mode: str | None = None
     export_path: str | None = None
+    clipboard_target: str | None = None
 
 
 @dataclass
