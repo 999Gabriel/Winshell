@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 from pathlib import Path
 import re
 import shutil
 import socket
 import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from winshell.adapters.runner import CommandResult, run_command
 from winshell.models import NetworkAdapter, NetworkSnapshot
@@ -436,3 +439,181 @@ def get_hostname() -> str:
 
 def get_whoami() -> str:
     return _run(["whoami"]).stdout or "Unavailable"
+
+
+def _safe_reverse_lookup(ip: str) -> str:
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except (socket.herror, socket.gaierror, OSError):
+        return ""
+
+
+def _resolve_target(target: str) -> dict[str, str]:
+    reverse_name = ""
+    try:
+        ipaddress.ip_address(target)
+        resolved = target
+        reverse_name = _safe_reverse_lookup(target)
+        canonical_name = reverse_name or target
+    except ValueError:
+        try:
+            resolved = socket.gethostbyname(target)
+        except socket.gaierror as exc:
+            return {"error": str(exc)}
+        canonical_name = socket.getfqdn(target)
+        reverse_name = _safe_reverse_lookup(resolved)
+    except socket.gaierror as exc:
+        return {"error": str(exc)}
+    return {
+        "target": target,
+        "resolved": resolved,
+        "canonical_name": canonical_name,
+        "reverse_name": reverse_name,
+    }
+
+
+def _ip_scope(ip: str) -> str:
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return "unknown"
+    if address.is_loopback:
+        return "loopback"
+    if address.is_private:
+        return "private"
+    if address.is_multicast:
+        return "multicast"
+    if address.is_reserved:
+        return "reserved"
+    return "public"
+
+
+def geoip_lookup(target: str) -> dict[str, object]:
+    resolution = _resolve_target(target)
+    if "error" in resolution:
+        return {"error": resolution["error"]}
+
+    resolved = resolution["resolved"]
+    scope = _ip_scope(resolved)
+    result: dict[str, object] = {
+        **resolution,
+        "scope": scope,
+        "coordinates": "",
+        "map_links": {},
+    }
+
+    if scope != "public":
+        result["note"] = "Private, loopback, or reserved addresses cannot be geolocated on a public map."
+        return result
+
+    request = Request(
+        f"https://ipwho.is/{resolved}",
+        headers={"User-Agent": "WinShell/0.1"},
+    )
+    try:
+        with urlopen(request, timeout=6) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        return {"error": f"Geolocation lookup failed: {exc}"}
+
+    if not payload.get("success", True):
+        message = payload.get("message", "Unknown geolocation lookup failure.")
+        return {"error": f"Geolocation lookup failed: {message}"}
+
+    latitude = payload.get("latitude")
+    longitude = payload.get("longitude")
+    coordinates = ""
+    map_links: dict[str, str] = {}
+    if latitude is not None and longitude is not None:
+        coordinates = f"{latitude}, {longitude}"
+        map_links = {
+            "Apple Maps": f"https://maps.apple.com/?ll={latitude},{longitude}&q={resolved}",
+            "Google Maps": f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}",
+            "OpenStreetMap": f"https://www.openstreetmap.org/?mlat={latitude}&mlon={longitude}#map=10/{latitude}/{longitude}",
+        }
+
+    connection = payload.get("connection") or {}
+    timezone = payload.get("timezone") or {}
+    result.update(
+        {
+            "country": payload.get("country", ""),
+            "region": payload.get("region", ""),
+            "city": payload.get("city", ""),
+            "coordinates": coordinates,
+            "timezone": timezone.get("id", "") or timezone.get("abbr", ""),
+            "isp": connection.get("isp", ""),
+            "org": connection.get("org", ""),
+            "asn": str(connection.get("asn", "")),
+            "map_links": map_links,
+        }
+    )
+    return result
+
+
+def neighbor_devices() -> dict[str, object]:
+    arp_result = arp_cache()
+    if "error" in arp_result:
+        return {"error": arp_result["error"]}
+
+    seen: set[tuple[str, str]] = set()
+    neighbors: list[dict[str, str]] = []
+    for entry in arp_result.get("entries", []):
+        ip = entry["ip"]
+        try:
+            address = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if address.is_multicast or address.is_loopback or address.is_unspecified:
+            continue
+        if entry["mac"].upper() == "FF-FF-FF-FF-FF-FF":
+            continue
+        key = (ip, entry["interface"])
+        if key in seen:
+            continue
+        seen.add(key)
+        neighbors.append(
+            {
+                "ip": ip,
+                "hostname": _safe_reverse_lookup(ip) or "Unavailable",
+                "mac": entry["mac"],
+                "interface": entry["interface"],
+                "scope": _ip_scope(ip),
+                "type": entry["type"],
+            }
+        )
+
+    neighbors.sort(key=lambda item: (item["scope"] != "private", item["interface"], item["ip"]))
+    return {"entries": neighbors}
+
+
+def inspect_target(target: str) -> dict[str, object]:
+    resolution = _resolve_target(target)
+    if "error" in resolution:
+        return {"error": resolution["error"]}
+
+    resolved = resolution["resolved"]
+    snapshot = network_snapshot()
+    local_adapter = next((adapter for adapter in snapshot.adapters if adapter.ipv4 == resolved), None)
+
+    arp_result = arp_cache()
+    arp_entry = None
+    if "entries" in arp_result:
+        arp_entry = next((entry for entry in arp_result["entries"] if entry["ip"] == resolved), None)
+
+    result: dict[str, object] = {
+        **resolution,
+        "scope": _ip_scope(resolved),
+        "is_local": local_adapter is not None or target in {"localhost", snapshot.host_name},
+        "mac": arp_entry["mac"] if arp_entry else (local_adapter.mac.replace(":", "-").upper() if local_adapter and local_adapter.mac else ""),
+        "interface": arp_entry["interface"] if arp_entry else (local_adapter.device if local_adapter else ""),
+        "adapter_name": local_adapter.name if local_adapter else "",
+        "architecture_note": "Remote architecture cannot be inferred reliably without active fingerprinting or agent access.",
+    }
+
+    if result["scope"] == "public":
+        geo = geoip_lookup(resolved)
+        if "error" not in geo:
+            result["geo"] = geo
+        else:
+            result["geo_error"] = geo["error"]
+    return result
