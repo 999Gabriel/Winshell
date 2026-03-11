@@ -9,6 +9,9 @@ The app does not try to clone PowerShell. It provides a simplified Windows-flavo
 - Textual TUI with header, scrollable output history, command line, and footer shortcuts
 - Windows-style command parser with aliases and friendly error messages
 - macOS adapters for common networking and system inspection commands
+- Public-IP geolocation with map-ready coordinates and links
+- LAN neighbor discovery with IP, MAC, interface, and reverse-DNS context
+- Local/target device inspection with architecture and adapter summaries
 - CMD mode and PowerShell mode prompt switch
 - Command history with arrow keys
 - Tab completion for supported commands
@@ -26,6 +29,9 @@ The app does not try to clone PowerShell. It provides a simplified Windows-flavo
 - `hostname`
 - `whoami`
 - `systeminfo`
+- `geoip <ip-or-host>`
+- `neighbors`
+- `deviceinfo [ip-or-host]`
 - `cls`
 - `help`
 - `exit`
@@ -71,6 +77,9 @@ ipconfig /all
 ping example.com
 tracert example.com
 nslookup openai.com
+geoip 8.8.8.8
+neighbors
+deviceinfo localhost
 arp -a
 netstat
 systeminfo
@@ -81,6 +90,9 @@ export lesson-output.txt
 ## Notes
 
 - `ipconfig` and `ipconfig /all` are formatted from macOS networking tools such as `ifconfig`, `route`, `networksetup`, and `scutil`.
+- `geoip` uses a public geolocation API at runtime for public IP addresses and prints coordinates plus Apple Maps / Google Maps / OpenStreetMap links.
+- `neighbors` uses the local ARP cache, so it is most useful after the Mac has recently talked to devices on the LAN.
+- `deviceinfo` shows local architecture and adapter data directly; remote device architecture is intentionally reported as unknown unless there is a reliable local source.
 - If a command syntax is recognized but not implemented, WinShell shows:
   `Command not supported yet in WinShell.`
 - If a command is unknown, WinShell shows a Windows-like error:

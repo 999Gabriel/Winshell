@@ -45,6 +45,9 @@ def format_help(command_rows: list[dict[str, str]]) -> str:
             "  ipconfig /all",
             "  route print",
             "  getmac",
+            "  neighbors",
+            "  geoip 8.8.8.8",
+            "  deviceinfo localhost",
             "  tasklist",
             "  resolve openai.com",
             "  test-netconnection example.com -port 443",
@@ -276,6 +279,120 @@ def format_socket_probe(title: str, result: dict[str, object]) -> str:
 
 def format_simple_section(title: str, body: str) -> str:
     return "\n".join([title, "", body.strip() or "No data available."])
+
+
+def format_geoip(result: dict[str, object]) -> str:
+    rows = [
+        ("Target", str(result.get("target", ""))),
+        ("Resolved Address", str(result.get("resolved", "")) or "Unavailable"),
+        ("Canonical Name", str(result.get("canonical_name", "")) or "Unavailable"),
+        ("Reverse Name", str(result.get("reverse_name", "")) or "Unavailable"),
+        ("Scope", str(result.get("scope", "")) or "Unavailable"),
+        ("Country", str(result.get("country", "")) or "Unavailable"),
+        ("Region", str(result.get("region", "")) or "Unavailable"),
+        ("City", str(result.get("city", "")) or "Unavailable"),
+        ("Coordinates", str(result.get("coordinates", "")) or "Unavailable"),
+        ("Timezone", str(result.get("timezone", "")) or "Unavailable"),
+        ("ISP", str(result.get("isp", "")) or "Unavailable"),
+        ("Organization", str(result.get("org", "")) or "Unavailable"),
+        ("ASN", str(result.get("asn", "")) or "Unavailable"),
+    ]
+    lines = ["IP Geolocation", "", *_rows(rows, indent=0)]
+    note = str(result.get("note", "")).strip()
+    if note:
+        lines.extend(["", f"Note: {note}"])
+    map_links = result.get("map_links") or {}
+    if map_links:
+        lines.extend(["", "Map Links:"])
+        for label, url in map_links.items():
+            lines.append(f"  {label}: {url}")
+    return "\n".join(lines)
+
+
+def format_neighbors(entries: list[dict[str, str]]) -> str:
+    lines = [
+        "Neighbor Devices",
+        "",
+        "  IP Address         Host Name                      MAC Address           Interface   Scope",
+    ]
+    for entry in entries:
+        lines.append(
+            f"  {entry['ip'].ljust(18)} {entry['hostname'][:28].ljust(30)} {entry['mac'].ljust(21)} {entry['interface'].ljust(11)} {entry['scope']}"
+        )
+    if len(lines) == 3:
+        lines.append("  No neighboring devices were found in the ARP cache.")
+    return "\n".join(lines)
+
+
+def format_deviceinfo_local(system: SystemSnapshot, network: NetworkSnapshot) -> str:
+    lines = [
+        "Local Device Profile",
+        "",
+        *_rows(
+            [
+                ("Host Name", system.host_name),
+                ("User Name", system.user_name),
+                ("Architecture", system.architecture),
+                ("Processor", system.processor),
+                ("Memory", system.memory),
+                ("OS Version", f"{system.os_name} {system.os_version} ({system.os_build})"),
+                ("Default Gateway", network.default_gateway or "Unavailable"),
+                ("DNS Servers", ", ".join(network.dns_servers) or "Unavailable"),
+            ],
+            indent=0,
+        ),
+        "",
+        "Adapters:",
+    ]
+    for adapter in network.adapters:
+        lines.append(f"  {adapter.name} [{adapter.device}]")
+        lines.extend(
+            [
+                f"    IPv4: {adapter.ipv4 or 'Unavailable'}",
+                f"    MAC : {adapter.mac.replace(':', '-').upper() if adapter.mac else 'Unavailable'}",
+                f"    State: {adapter.media or adapter.status.title()}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def format_deviceinfo_target(result: dict[str, object]) -> str:
+    rows = [
+        ("Target", str(result.get("target", ""))),
+        ("Resolved Address", str(result.get("resolved", "")) or "Unavailable"),
+        ("Canonical Name", str(result.get("canonical_name", "")) or "Unavailable"),
+        ("Reverse Name", str(result.get("reverse_name", "")) or "Unavailable"),
+        ("Scope", str(result.get("scope", "")) or "Unavailable"),
+        ("MAC Address", str(result.get("mac", "")) or "Unavailable"),
+        ("Interface", str(result.get("interface", "")) or "Unavailable"),
+        ("Adapter", str(result.get("adapter_name", "")) or "Unavailable"),
+        (
+            "Architecture",
+            "Local device" if result.get("is_local") else "Unknown for remote target",
+        ),
+    ]
+    lines = ["Target Device Profile", "", *_rows(rows, indent=0)]
+    note = str(result.get("architecture_note", "")).strip()
+    if note and not result.get("is_local"):
+        lines.extend(["", f"Note: {note}"])
+    geo = result.get("geo")
+    if isinstance(geo, dict):
+        lines.extend(
+            [
+                "",
+                "Location:",
+                f"  {geo.get('city', 'Unavailable')}, {geo.get('region', 'Unavailable')}, {geo.get('country', 'Unavailable')}",
+                f"  Coordinates: {geo.get('coordinates', 'Unavailable')}",
+            ]
+        )
+        map_links = geo.get("map_links") or {}
+        if map_links:
+            lines.append("  Map Links:")
+            for label, url in map_links.items():
+                lines.append(f"    {label}: {url}")
+    elif result.get("geo_error"):
+        lines.extend(["", f"Location lookup unavailable: {result['geo_error']}"])
+    return "\n".join(lines)
 
 
 def format_systeminfo(snapshot: SystemSnapshot) -> str:
